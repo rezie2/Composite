@@ -36,6 +36,8 @@ get_irqs(void)
     exit(-1);
   }
   */
+
+  printc("In getirqs\n");
   rdtscll(tsc); 
   for(i = 0; i < ITR; ) {
     rdtscll(endtsc);
@@ -70,15 +72,17 @@ get_irqs(void)
 void 
 cos_init(void *arg)
 {
+  static volatile int first = 1;
   printc("***BEGIN INTERRUPT TEST***\n");
 
   union sched_param sp;
 
   sp.c.type = SCHEDP_PRIO;
   sp.c.value = 3;
-
-  if(0 > (event_thd = sched_create_thd(cos_spd_id(), sp.v, 0, 0))) BUG();
-  
+  if(first) {
+    if(0 > (event_thd = sched_create_thd(cos_spd_id(), sp.v, 0, 0))) BUG();
+    first = 0;
+  }
   get_irqs();
   //event_thd = sched    
 
