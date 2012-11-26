@@ -66,7 +66,6 @@ get_irqs(void)
   }
   
   return;
-  //pthread_exit(NULL);
 }
 
 void 
@@ -84,7 +83,6 @@ cos_init(void *arg)
     first = 0;
   }
   get_irqs();
-  //event_thd = sched    
 
   printc("***DONE***\n");
   return;
