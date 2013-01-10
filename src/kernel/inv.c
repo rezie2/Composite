@@ -9,17 +9,14 @@
  * gparmer@gwu.edu, 2009
  */
 
-//#define UPCALL_TIMING 1
-
 #include "include/ipc.h"
 #include "include/spd.h"
 #include "include/debug.h"
 #include "include/measurement.h"
 #include "include/mmap.h"
 #include "include/per_cpu.h"
-
+#include "include/chal.h"
 #include <linux/kernel.h>
-
 
 /* 
  * These are the 1) page for the pte for the shared region and 2) the
@@ -45,68 +42,46 @@ static inline struct shared_user_data *get_shared_data(void)
  */
 static unsigned long cycle_cnt;
 
-void ipc_init(void)
+void 
+ipc_init(void)
 {
-	//memset(shared_region_page, 0, PAGE_SIZE);
 	memset(shared_data_page, 0, PAGE_SIZE);
 	rdtscl(cycle_cnt);
 
 	return;
 }
 
-static inline void open_spd(struct spd_poly *spd)
+static inline void 
+open_spd(struct spd_poly *spd)
 {
 	printk("cos: open_spd (asymmetric trust) not supported on x86.\n");
 	
 	return;
 }
 
-extern void switch_host_pg_tbls(paddr_t pt);
-static inline void switch_pg_tbls(paddr_t new, paddr_t old)
+static inline void 
+switch_pgtbls(paddr_t new, paddr_t old)
 {
 	if (likely(old != new)) {
-		native_write_cr3(new);
-		switch_host_pg_tbls(new);
+		chal_pgtbl_switch(new);
 	}
 
 	return;
 }
 
-static inline void open_close_spd(struct spd_poly *o_spd, struct spd_poly *c_spd)
+static inline void 
+open_close_spd(struct spd_poly *o_spd, struct spd_poly *c_spd)
 {
-	switch_pg_tbls(o_spd->pg_tbl, c_spd->pg_tbl);
+	switch_pgtbls(o_spd->pg_tbl, c_spd->pg_tbl);
 
 	return;
 }
 
-static inline void open_close_spd_ret(struct spd_poly *c_spd) /*, struct spd_poly *s_spd)*/
+static inline void 
+open_close_spd_ret(struct spd_poly *c_spd)
 {
-	native_write_cr3(c_spd->pg_tbl);
-	switch_host_pg_tbls(c_spd->pg_tbl);
+	chal_pgtbl_switch(c_spd->pg_tbl);
 	
-	return;
-}
-
-static void print_stack(struct thread *thd)
-{
-	int i;
-
-	printk("cos: In thd %x, stack:\n", thd_get_id(thd));
-	for (i = 0 ; i <= thd->stack_ptr ; i++) {
-		struct thd_invocation_frame *frame = &thd->stack_base[i];
-		printk("cos: \t[spd %d]\n", spd_get_index(frame->spd));
-	}
-}
-
-void print_regs(struct pt_regs *regs)
-{
-	printk("cos: EAX:%x\tEBX:%x\tECX:%x\n"
-	       "cos: EDX:%x\tESI:%x\tEDI:%x\n"
-	       "cos: EIP:%x\tESP:%x\tEBP:%x\n",
-	       (unsigned int)regs->ax, (unsigned int)regs->bx, (unsigned int)regs->cx,
-	       (unsigned int)regs->dx, (unsigned int)regs->si, (unsigned int)regs->di,
-	       (unsigned int)regs->ip, (unsigned int)regs->sp, (unsigned int)regs->bp);
-
 	return;
 }
 
@@ -131,7 +106,7 @@ ipc_walk_static_cap(unsigned int capability, vaddr_t sp,
 	struct thd_invocation_frame *curr_frame;
 	struct spd *curr_spd, *dest_spd;
 	struct invocation_cap *cap_entry;
-	struct thread *thd = core_get_curr_thd();
+	struct thread *thd = core_get_curr_thd_id(get_cpuid_fast());
 
 	capability >>= 20;
 
@@ -175,9 +150,7 @@ ipc_walk_static_cap(unsigned int capability, vaddr_t sp,
 	if (unlikely(!thd_spd_in_composite(curr_frame->current_composite_spd, curr_spd))) {
 		printk("cos: Error, incorrect capability (Cap %d has spd %d, stk @ %d has %d).\n",
 		       capability, spd_get_index(curr_spd), thd->stack_ptr, spd_get_index(curr_frame->spd));
-		print_stack(thd);
 		/* 
-
 		 * FIXME: do something here like throw a fault to be
 		 * handled by a user-level handler
 		 */
@@ -187,10 +160,11 @@ ipc_walk_static_cap(unsigned int capability, vaddr_t sp,
 	cos_meas_event(COS_MEAS_INVOCATIONS);
 
 	open_close_spd(dest_spd->composite_spd, curr_spd->composite_spd);
-	
+
+	/* Updating current spd: not used for now. */
 	/* core_put_curr_spd(&(dest_spd->spd_info)); */
 
-	ret->thd_id = thd->thread_id | (get_cpuid() << 16);
+	ret->thd_id = thd->thread_id | (get_cpuid_fast() << 16);
 	ret->spd_id = spd_get_index(curr_spd);
 
 	spd_mpd_ipc_take((struct composite_spd *)dest_spd->composite_spd);
@@ -198,8 +172,6 @@ ipc_walk_static_cap(unsigned int capability, vaddr_t sp,
 	/* add a new stack frame for the spd we are invoking (we're committed) */
 	thd_invocation_push(thd, cap_entry->destination, sp, ip);
 	cap_entry->invocation_cnt++;
-
-//	printk("%d: %d->%d\n", thd_get_id(thd), spd_get_index(curr_spd), spd_get_index(dest_spd));
 
 	return cap_entry->dest_entry_instruction;
 }
@@ -219,7 +191,7 @@ pop(struct pt_regs **regs_restore)
 	struct thd_invocation_frame *inv_frame;
 	struct thd_invocation_frame *curr_frame;
 
-	struct thread *curr = core_get_curr_thd();
+	struct thread *curr = core_get_curr_thd_id(get_cpuid_fast());
 
 	inv_frame = thd_invocation_pop(curr);
 
@@ -246,8 +218,6 @@ pop(struct pt_regs **regs_restore)
 	 *
 	 * This REALLY should be spd_mpd_release.
 	 */
-	//cos_ref_release(&inv_frame->current_composite_spd->ref_cnt);
-	//spd_mpd_release((struct composite_spd *)inv_frame->current_composite_spd);
 	spd_mpd_ipc_release((struct composite_spd *)inv_frame->current_composite_spd);
 
 	/* Fault caused initial invocation.  FIXME: can we get this off the common case path? */
@@ -341,7 +311,6 @@ static inline void __switch_thread_context(struct thread *curr, struct thread *n
 	core_put_curr_thd(next);
 	core_put_curr_spd(nspd);
 
-	switch_thread_data_page(ctid, ntid);
 	/* thread ids start @ 1, thus thd pages are offset above the data page */
 	ud->current_thread = ntid;
 	ud->argument_region = (void*)((ntid * PAGE_SIZE) + COS_INFO_REGION_ADDR);
@@ -882,7 +851,7 @@ cos_syscall_switch_thread_cont(int spd_id, unsigned short int rthd_id,
 	} else {
 		next_thd = switch_thread_parse_data_area(da, &ret_code);
 		if (unlikely(0 == next_thd)) {
-//			printk("err: data area\n");
+			printk("err: data area\n");
 			goto_err(ret_err, "data_area\n");
 		}
 
@@ -1112,7 +1081,7 @@ upcall_execute_no_vas_switch(struct thread *uc, struct thread *prev)
 
 		/* we are omitting the native_write_cr3 to switch
 		 * page tables */
-		switch_host_pg_tbls(nspd->pg_tbl);
+		__chal_pgtbl_switch(nspd->pg_tbl);
 	}
 	return uc;
 }
@@ -1337,7 +1306,6 @@ static struct pt_regs *brand_execution_completion(struct thread *curr, int *pree
  */
 struct thread *brand_next_thread(struct thread *brand, struct thread *preempted, int preempt);
 
-unsigned long long brand_s = 0;
 //#define BRAND_UL_LATENCY
 extern void cos_syscall_brand_wait(int spd_id, unsigned short int bid, int *preempt);
 COS_SYSCALL struct pt_regs *
@@ -1346,7 +1314,6 @@ cos_syscall_brand_wait_cont(int spd_id, unsigned short int bid, int *preempt)
 	struct thread *curr, *brand;
 	struct spd *curr_spd;
 
-	rdtscll(brand_s);
 	curr = core_get_curr_thd();
 
 	curr_spd = thd_validate_get_current_spd(curr, spd_id);
@@ -1658,8 +1625,6 @@ void cos_net_deregister(struct cos_net_callbacks *cn_cb)
 	cos_net_fns = NULL;
 }
 
-extern int host_attempt_brand(struct thread *brand);
-
 void cos_net_prebrand(void)
 {
 	cos_meas_event(COS_MEAS_PACKET_RECEPTION);
@@ -1693,7 +1658,7 @@ int cos_net_try_brand(struct thread *t, void *data, int len)
 	*lenp = len;
 	memcpy(buff, data, len);
 	
-	host_attempt_brand(t);
+	chal_attempt_brand(t);
 	
 	return 0;
 }
@@ -1725,15 +1690,13 @@ int cos_net_notify_drop(struct thread *brand)
 /*** Translator Interface ***/
 /****************************/
 
-extern int pgtbl_add_entry(paddr_t pgtbl, vaddr_t vaddr, paddr_t paddr); 
-extern void *va_to_pa(void *va);
 static const struct cos_trans_fns *trans_fns = NULL;
 void cos_trans_reg(const struct cos_trans_fns *fns) { trans_fns = fns; }
 void cos_trans_dereg(void) { trans_fns = NULL; }
 void cos_trans_upcall(void *brand) 
 {
 	assert(brand);
-	host_attempt_brand((struct thread *)brand);
+	chal_attempt_brand((struct thread *)brand);
 }
 
 COS_SYSCALL int
@@ -1750,11 +1713,8 @@ cos_syscall_trans_cntl(spdid_t spdid, unsigned long op_ch, unsigned long addr, i
 	case COS_TRANS_MAP_SZ:
 	{
 		int sz = -1;
-		if (!trans_fns) printk("no trans fns...\n");
-		if (trans_fns) {
-			sz = trans_fns->map_sz(channel);
-			printk("kern sz %d", sz);
-		}
+		if (trans_fns) sz = trans_fns->map_sz(channel);
+
 		return sz;
 	}
 	case COS_TRANS_MAP:
@@ -1771,7 +1731,7 @@ cos_syscall_trans_cntl(spdid_t spdid, unsigned long op_ch, unsigned long addr, i
 		sz    = trans_fns->map_sz(channel);
 		if (off > sz) return -1;
 
-		if (pgtbl_add_entry(s->spd_info.pg_tbl, addr, (paddr_t)va_to_pa(((char *)kaddr+off)))) {
+		if (chal_pgtbl_add(s->spd_info.pg_tbl, addr, (paddr_t)chal_va2pa(((char *)kaddr+off)))) {
 			printk("cos: trans grant -- could not add entry to page table.\n");
 			return -1;
 		}
@@ -1799,7 +1759,6 @@ cos_syscall_trans_cntl(spdid_t spdid, unsigned long op_ch, unsigned long addr, i
  * Partially emulate a device here: Receive ring for holding buffers
  * to receive data into, and a synchronous call to transmit data.
  */
-extern vaddr_t pgtbl_vaddr_to_kaddr(paddr_t pgtbl, unsigned long addr);
 extern int user_struct_fits_on_page(unsigned long addr, unsigned int size);
 /* assembly in ipc.S */
 extern int cos_syscall_buff_mgmt(void);
@@ -1829,7 +1788,7 @@ cos_syscall_buff_mgmt_cont(int spd_id, void *addr, unsigned int thd_id, unsigned
 	}
 
 	if (unlikely(COS_BM_XMIT != option &&
-		     0 == (kaddr = pgtbl_vaddr_to_kaddr(spd->spd_info.pg_tbl, (unsigned long)addr)))) {
+		     0 == (kaddr = chal_pgtbl_vaddr2kaddr(spd->spd_info.pg_tbl, (unsigned long)addr)))) {
 		printk("cos: buff mgmt -- could not find kernel address for %p in spd %d\n",
 		       addr, spd_id);
 		return -1;
@@ -1865,7 +1824,7 @@ cos_syscall_buff_mgmt_cont(int spd_id, void *addr, unsigned int thd_id, unsigned
 				 * pinned. */
 				kaddr = (vaddr_t)user_gi->data;
 			} else {
-				kaddr = pgtbl_vaddr_to_kaddr(spd->spd_info.pg_tbl, (unsigned long)user_gi->data);
+				kaddr = chal_pgtbl_vaddr2kaddr(spd->spd_info.pg_tbl, (unsigned long)user_gi->data);
 				if (unlikely(!kaddr)) {		    
 					printk("cos: buff mgmt -- could not find kernel address for %p in spd %d\n",
 					       user_gi->data, spd_id);
@@ -2322,8 +2281,6 @@ brand_higher_urgency(struct thread *upcall, struct thread *prev)
 	}
 }
 
-extern int host_can_switch_pgtbls(void);
-
 /* 
  * This does NOT release the composite spd reference of the preempted
  * thread, as you might expect.
@@ -2359,7 +2316,8 @@ brand_next_thread(struct thread *brand, struct thread *preempted, int preempt)
 		assert(!(upcall->flags & THD_STATE_READY_UPCALL));
 		cos_meas_event(COS_MEAS_BRAND_PEND);
 		cos_meas_stats_start(COS_MEAS_STATS_UC_PEND_DELAY, 0);
-		/* FIXME: RACE */
+		/* FIXME: RACE. This could be running on more than one
+		 * cores simultaneously. We need atomic increment. */
 		brand->pending_upcall_requests++;
 
 		event_record("brand activated, but upcalls active", thd_get_id(preempted), thd_get_id(upcall));
@@ -2418,7 +2376,7 @@ brand_next_thread(struct thread *brand, struct thread *preempted, int preempt)
 		/* Actually setup the brand/upcall to happen here.
 		 * If we aren't in the composite thread, be careful
 		 * what state we change (e.g. page tables) */
-		if (likely(host_can_switch_pgtbls())) {
+		if (likely(chal_pgtbl_can_switch())) {
 			upcall_execute(upcall, (struct composite_spd*)thd_get_thd_spdpoly(upcall),
 				       preempted, (struct composite_spd*)thd_get_thd_spdpoly(preempted));
 		} else {
@@ -2522,11 +2480,11 @@ cos_syscall_sched_cntl(int spd_id, int operation, int thd_id, long option)
 		 * events when the pagetable for this spd is not
 		 * mapped in.  */
 		spd->kern_sched_shared_page[get_cpuid()] = (struct cos_sched_data_area *)
-			pgtbl_vaddr_to_kaddr(spd->spd_info.pg_tbl, (unsigned long)spd->sched_shared_page[get_cpuid()]);
+			chal_pgtbl_vaddr2kaddr(spd->spd_info.pg_tbl, region);
 		spd->prev_notification[get_cpuid()] = 0;
 
 		/* FIXME: pin the page */
-		/* printk("core %u, sched shared region @%p, kern @%p\n", get_cpuid(), spd->sched_shared_page[get_cpuid()], spd->kern_sched_shared_page[get_cpuid()]);		 */
+		printk("core %u, sched shared region @%p, kern @%p\n", get_cpuid(), spd->sched_shared_page[get_cpuid()], spd->kern_sched_shared_page[get_cpuid()]);
 		break;
 	}
 	case COS_SCHED_THD_EVT:
@@ -2883,11 +2841,6 @@ mpd_merge(struct composite_spd *c1, struct composite_spd *c2)
 	assert(c1 != c2);
 	other = get_spd_to_subordinate(c1, c2);
 	dest = (other == c1) ? c2 : c1;
-	/*
-	extern void print_valid_pgtbl_entries(paddr_t pt);
-	print_valid_pgtbl_entries(dest->spd_info.pg_tbl);
-	print_valid_pgtbl_entries(other->spd_info.pg_tbl);
-	*/
 
 	/* 
 	 * While there are spds in the current composite, move them to
@@ -3092,7 +3045,7 @@ cos_syscall_mpd_cntl(int spd_id, int operation,
 	 * current spd is subordinated to another spd.  If they did,
 	 * we should do something about it:
 	 */
-	switch_pg_tbls(new_pg_tbl, curr_pg_tbl);
+	switch_pgtbls(new_pg_tbl, curr_pg_tbl);
 	
 	return ret;
 }
@@ -3105,11 +3058,6 @@ cos_syscall_mpd_cntl(int spd_id, int operation,
  * or is in the current composite spd, or is a child of a fault
  * thread.
  */
-extern paddr_t pgtbl_rem_ret(paddr_t pgtbl, vaddr_t va);
-extern unsigned long __pgtbl_lookup_address(paddr_t pgtbl, unsigned long addr);
-extern void __pgtbl_or_pgd(paddr_t pgtbl, unsigned long addr, unsigned long val);
-extern void pgtbl_print_path(paddr_t pgtbl, unsigned long addr);
-
 COS_SYSCALL int 
 cos_syscall_mmap_cntl(int spdid, long op_flags_dspd, vaddr_t daddr, unsigned long mem_id)
 {
@@ -3152,7 +3100,7 @@ cos_syscall_mmap_cntl(int spdid, long op_flags_dspd, vaddr_t daddr, unsigned lon
 		 * forces demand paging to not be used (explicitly
 		 * writing all of the pages itself).
 		 */
-		if (pgtbl_add_entry(spd->spd_info.pg_tbl, daddr, page)) {
+		if (chal_pgtbl_add(spd->spd_info.pg_tbl, daddr, page)) {
 			printk("cos: mmap grant into %d @ %x -- could not add entry to page table.\n", 
 			       dspd_id, (unsigned int)daddr);
 			ret = -1;
@@ -3164,7 +3112,7 @@ cos_syscall_mmap_cntl(int spdid, long op_flags_dspd, vaddr_t daddr, unsigned lon
 	{
 		paddr_t pa;
 
-		if (!(pa = pgtbl_rem_ret(spd->spd_info.pg_tbl, daddr))) {
+		if (!(pa = chal_pgtbl_rem(spd->spd_info.pg_tbl, daddr))) {
 			ret = 0;
 			break;
 		}
@@ -3174,8 +3122,7 @@ cos_syscall_mmap_cntl(int spdid, long op_flags_dspd, vaddr_t daddr, unsigned lon
 		break;
 	}
 	case COS_MMAP_TLBFLUSH:
-		native_write_cr3(spd->spd_info.pg_tbl);
-//		pgtbl_print_path(spd->spd_info.pg_tbl, daddr);
+		chal_pgtbl_switch(spd->spd_info.pg_tbl);
 		break;
 	default:
 		ret = -1;
@@ -3218,9 +3165,6 @@ cos_syscall_pfn_cntl(int spdid, long op_dspd, unsigned int mem_id, int extent)
 	return ret;
 }
 
-extern void
-copy_pgtbl_range(paddr_t pt_to, paddr_t pt_from, 
-		 unsigned long lower_addr, unsigned long size);
 /* 
  * The problem solved here is this: Each component has a page-table
  * that defines its memory mappings.  This is updated by the
@@ -3242,10 +3186,10 @@ fault_update_mpd_pgtbl(struct thread *thd, struct pt_regs *regs, vaddr_t fault_a
 	if (origin != virtual_namespace_query(fault_addr)) return 0;
 	active = thd_get_thd_spdpoly(thd);
 
-	if ( pgtbl_entry_absent(origin->spd_info.pg_tbl, fault_addr)) return 0;
-	if (!pgtbl_entry_absent(active->pg_tbl, fault_addr)) return 0;
+	if ( chal_pgtbl_entry_absent(origin->spd_info.pg_tbl, fault_addr)) return 0;
+	if (!chal_pgtbl_entry_absent(active->pg_tbl, fault_addr)) return 0;
 
-	copy_pgtbl_range(active->pg_tbl, origin->spd_info.pg_tbl, fault_addr, HPAGE_SIZE);
+	chal_pgtbl_copy_range(active->pg_tbl, origin->spd_info.pg_tbl, fault_addr, HPAGE_SIZE);
 
 	return 1;
 }
@@ -3263,7 +3207,6 @@ cos_syscall_print(int spdid, char *str, int len)
 	 * passed in the arg region.  Perhaps we should just check
 	 * that.
 	 */
-	if (str[0] == 'Z' && str[1] == 'Z') {printk("%u\n", (unsigned int)len);return 0;}
 	if (len < 1) return 0;
 	if (len >= MAX_LEN) len = MAX_LEN - 1;
 	memcpy(kern_buf, str, len);
@@ -3297,7 +3240,7 @@ cos_syscall_cap_cntl(int spdid, int option, u32_t arg1, long arg2)
 
 	switch (option) {
 	case COS_CAP_GET_INVCNT:
-		va = pgtbl_vaddr_to_kaddr(cspd->spd_info.pg_tbl, (unsigned long)cspd->user_vaddr_cap_tbl);
+		va = chal_pgtbl_vaddr2kaddr(cspd->spd_info.pg_tbl, (unsigned long)cspd->user_vaddr_cap_tbl);
 		assert((vaddr_t)cspd->user_cap_tbl == va);
 		
 		ret = spd_read_reset_invocation_cnt(cspd, sspd);
@@ -3345,14 +3288,14 @@ cos_syscall_stats(int spdid)
 }
 
 extern int cos_syscall_idle(void);
-extern void host_idle(void);
 COS_SYSCALL int 
 cos_syscall_idle_cont(int spdid)
 {
 	struct thread *c = core_get_curr_thd();
 	
-	host_idle();
 	if (c != core_get_curr_thd()) return COS_SCHED_RET_AGAIN;
+
+	chal_idle();
 
 	return COS_SCHED_RET_SUCCESS;
 }
@@ -3472,7 +3415,7 @@ cos_syscall_spd_cntl(int id, int op_spdid, long arg1, long arg2)
 			break;
 		}
 		/* Is the ucap tbl mapped in? */
-		kaddr = pgtbl_vaddr_to_kaddr(spd->spd_info.pg_tbl, (vaddr_t)spd->user_vaddr_cap_tbl);
+		kaddr = chal_pgtbl_vaddr2kaddr(spd->spd_info.pg_tbl, (vaddr_t)spd->user_vaddr_cap_tbl);
 		if (0 == kaddr) {
 			ret = -1;
 			break;
@@ -3541,23 +3484,20 @@ cos_syscall_vas_cntl(int id, int op_spdid, long addr, long sz)
 	return ret;
 }
 
-extern int send_IPI(int cpuid, int thdid, int wait);
+extern int send_ipi(int cpuid, int thdid, int wait);
 
 //volatile int kern_tsc = 0;
-
+/* The IPI calls should not be accessible from user level. This is for
+ * test purpose only. Will remove this syscall. */
 COS_SYSCALL int 
 cos_syscall_send_ipi(int spd_id, long cpuid, int thdid, long arg)
 {
-	//struct thread *thd;
-	/* unsigned long long t; */
-	/* rdtscll(t); */
 	int wait, option;
 	option = arg & 0xFFFF;
 	wait = arg >> 16;
 	assert(wait == 0);
 
-	//thd = thd_get_by_id(thdid);
-	return send_IPI(cpuid, thdid, wait);
+	return send_ipi(cpuid, thdid, wait);
 }
 
 /* 

@@ -15,23 +15,29 @@
 #define RET_CAP ((1<<20)-1)
 #define IPRETURN 4
 
-;; #if ENABLE_STACK_MANAGER!=1
-;; .bss
-;; .align 32
-;; nil:
-;; 	.rep 1024
-;; 	.long 0
-;; 	.endr
+#if ENABLE_STACK_MANAGER!=1
+.section .initonce
+.align 32
+nil:
+	.rep 1024
+	.long 0
+	.endr
 
-;; .globl cos_static_stack
-;; cos_static_stack:
-;; 	.rep ALL_STACK_SZ
-;; 	.long 0
-;; 	.endr
-;; .globl cos_static_stack_end
-;; cos_static_stack_end:
-;; 	.long 0
-;; #endif
+.globl cos_static_stack
+cos_static_stack:
+	.rep ALL_STACK_SZ
+	.long 0
+	.endr
+.globl cos_static_stack_end
+cos_static_stack_end:
+#endif
+
+.section .initonce
+.globl stkmgr_stack_space
+stkmgr_stack_space:
+	.rep ALL_TMP_STACKS_SZ
+	.long 0
+	.endr
 	
 .text
 .globl cos_upcall_entry

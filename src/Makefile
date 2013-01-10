@@ -1,7 +1,7 @@
 MAKEFLAGS=--no-print-directory -I$(PWD)
 #$(info Make flags $(MAKEFLAGS))
 
-all: kern
+all: kern cp
 comps: 
 	$(info )
 	$(info ***********************************************)
@@ -30,6 +30,7 @@ distclean: clean
 	$(MAKE) $(MAKEFLAGS) -C components distclean	
 
 init:
+	@cd ..; git submodule init; git submodule update; cd src/
 	$(MAKE) $(MAKEFLAGS) -C components init
 	$(MAKE) $(MAKEFLAGS) -C platform init
 

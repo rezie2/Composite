@@ -30,6 +30,37 @@ typedef signed int       s32_t;
 typedef signed long long s64_t;
 #endif
 
+/* Macro used to define per core variables */
+#define PERCPU(type, name)                              \
+	PERCPU_DECL(type, name);                        \
+	PERCPU_VAR(name)
+
+#define PERCPU_DECL(type, name)                         \
+struct __##name##_percore_decl {                        \
+	type name;                                      \
+} CACHE_ALIGNED
+
+#define PERCPU_VAR(name)                                \
+struct __##name##_percore_decl name[NUM_CPU]
+
+/* With attribute */
+#define PERCPU_ATTR(attr, type, name)	   	        \
+	PERCPU_DECL(type, name);                        \
+	PERCPU_VAR_ATTR(attr, name)
+
+#define PERCPU_VAR_ATTR(attr, name)                     \
+attr struct __##name##_percore_decl name[NUM_CPU]
+
+/* when define an external per cpu variable */
+#define PERCPU_EXTERN(name)		                \
+	PERCPU_VAR_ATTR(extern, name)
+
+/* We have different functions for getting current CPU in user level
+ * and kernel. Thus the GET_CURR_CPU is used here. It's defined
+ * separately in user(cos_component.h) and kernel(per_cpu.h).*/
+#define PERCPU_GET(name)                (&(name[GET_CURR_CPU].name))
+#define PERCPU_GET_TARGET(name, target) (&(name[target].name))
+
 #include "../measurement.h"
 
 struct shared_user_data {
@@ -114,6 +145,8 @@ struct cos_sched_data_area {
 	struct cos_event_notification cos_evt_notif;
 	struct cos_sched_events cos_events[NUM_SCHED_EVTS]; // maximum of PAGE_SIZE/sizeof(struct cos_sched_events) - ceil(sizeof(struct cos_sched_curr_thd)/(sizeof(struct cos_sched_events)+sizeof(locks)))
 } __attribute__((packed,aligned(4096)));
+
+PERCPU_DECL(struct cos_sched_data_area, cos_sched_notifications);
 
 #ifndef NULL
 #define NULL ((void*)0)

@@ -1,3 +1,3 @@
-INTERFACES=membrane
+INTERFACES=membrane_meas
 
 include ../Makefile.subdir
