@@ -43,7 +43,7 @@ struct cringbuf sharedbuf;
 //#define IPADDR "10.0.2.8"
 #define IFNAME "tun0"
 #define P2PPEER "192.168.0.110"
-#define MAXIPI 200000
+#define MAXIPI 50000
 
 int ratectl = 0;
 unsigned long long ipis = 0, total_read = 0, lo = 0, hi = 0;
@@ -51,7 +51,7 @@ unsigned long long ipis = 0, total_read = 0, lo = 0, hi = 0;
 void
 signal_handler(int signo)
 {
-  printf("IPIs generated: %lld", ipis);
+  printf("IPIs generated: %lld", hi+lo);
   if(ratectl){
       printf(", highprio IPIs: %lld, loprio IPIs: %lld\n", hi, lo);
       lo = hi = ipis = 0;
@@ -142,47 +142,38 @@ recv_pkt(void *data)
     }
     cringbuf_init(&sharedbuf, a, MAP_SIZE);
 
-    char buff[6], portstr[10], *pend;
-    buff[0] = 'H';  buff[1] = 'E'; buff[2] = 'L'; buff[3] = 'L'; buff[4] = 'O';  buff[5] = '\0';
-
+    char portstr[7];
+    int portnum;
+    portstr[6] = '\0';
     printf("going to sleep for a few seconds; hurry and activate composite!\n");
     sleep(sleep_var); 
          
     do {
-      int amread = 0, portnum;
+      int amread = 0;
     
       ret = read(fdr, buf1, msg_size);
-      
-      amread += snprintf(portstr+amread, 10, "%#x", buf1[22] & 0xff);
+      amread += snprintf(portstr, 7, "%#x", buf1[22] & 0xff);
       if((buf1[23] & 0xff) < 16) 
 	portstr[amread++] = '0';
-      amread += snprintf(portstr+amread, 10, "%x", buf1[23] & 0xff);
-      portstr[amread] = '\0';
-      portnum = strtol(portstr, NULL, 16);
+        amread += snprintf(portstr+amread, 7, "%x", buf1[23] & 0xff);
+        portnum = strtol(portstr, NULL, 16);
 
       switch(portnum) { 
       case HIPRIOPORT:
 	write(fd, &c, 1);
-	ipis++;
 	hi++;
 	break;
-      case LOPRIOPORT:
-	
-	if(ipis < MAXIPI) {
-	//if(lo+hi < MAXIPI)
+      case LOPRIOPORT:	
+	//if(ipis < MAXIPI) {
+	if(lo+hi < MAXIPI) {
 	  write(fd, &c, 1);
 	  lo++;
-	  ipis++;
+	  //ipis++;
 	}
 	break;
       default:
 	break;
       }
-      
-      /* //tight loop without QoS
-      write(fd, &c, 1);
-      ipis++;
-      */
     } while(1);
 
     close(fdr);
