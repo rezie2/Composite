@@ -32,6 +32,9 @@
 #include "../../../../../components/include/cringbuf.h"
 #include "../../../../../kernel/include/shared/cos_config.h"
 
+#define likely(x)     __builtin_expect(!!(x), 1)
+#define unlikely(x)   __builtin_expect(!!(x), 0)
+
 #define PROC_FILE "/proc/translator"
 #define MAP_SIZE  COS_PRINT_MEM_SZ 
 #define PRINT_CHUNK_SZ (4096*16)
@@ -43,22 +46,32 @@ struct cringbuf sharedbuf;
 //#define IPADDR "10.0.2.8"
 #define IFNAME "tun0"
 #define P2PPEER "192.168.0.110"
-#define MAXIPI 50000
+//#define MAXIPI 10000
 
 int ratectl = 0;
-unsigned long long ipis = 0, total_read = 0, lo = 0, hi = 0;
+unsigned long long ipis = 0, total_read = 0, lo = 0, hi = 0, prev_ipi = 0;
+int MAXIPI = 1000;// 5000,100000
 
 void
 signal_handler(int signo)
 {
-  printf("IPIs generated: %lld", hi+lo);
-  if(ratectl){
+  printf("IPIs generated: %lld, IPI Threshold: %d", hi+lo, MAXIPI);
+  //if(ratectl){
       printf(", highprio IPIs: %lld, loprio IPIs: %lld\n", hi, lo);
-      lo = hi = ipis = 0;
-  } 
+      /*
+      if(prev_ipi > lo+hi) 
+	MAXIPI--;
+      else {
+	prev_ipi = lo+hi;
+	MAXIPI++;
+      }
+      */
+      lo =  hi = ipis = 0;
+      //} 
   //else 
   //    printf("\n");
-  ipis = 0;
+  
+  //ipis = 0;
 }
 
 void 
@@ -79,6 +92,7 @@ start_timers()
 	memset(&itv, 0, sizeof(itv));
 	itv.it_value.tv_sec = 1;
 	itv.it_interval.tv_sec = 1;
+	//itv.it_interval.tv_usec = 500;
 	if(setitimer(ITIMER_REAL, &itv, NULL)) {
 	    perror("setitimer; setting up sigalarm");
 	    return;
@@ -97,8 +111,8 @@ recv_pkt(void *data)
     char buf[] = "ifconfig "IFNAME" inet "IPADDR" netmask 255.255.255.255 pointopoint "P2PPEER;
     struct ifreq ifr;
 
-    int fd, _read = 0;
-    void *a;
+    int fd_low, fd_high, _read = 0;
+    void *a, *b;
     char c, buf1[PRINT_CHUNK_SZ];
 
     printf("Message size is (%d)\n", msg_size);
@@ -127,27 +141,32 @@ recv_pkt(void *data)
     }
     printf("Done setting TUN. \n");
 
-    fd = open(PROC_FILE, O_RDWR);
-    if (fd < 0) {
+    fd_low = open(PROC_FILE, O_RDWR);
+    fd_high = open(PROC_FILE, O_RDWR);
+    if (fd_low < 0 || fd_high < 0) {
       perror("open");
       exit(-1);
     }
-
-    trans_ioctl_set_channel(fd, COS_TRANS_SERVICE_TERM);
-    trans_ioctl_set_direction(fd, COS_TRANS_DIR_LTOC);
-    a = mmap(NULL, MAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-    if (MAP_FAILED == a) {
+    printf("LO %d HI %d\n", COS_TRANS_SERVICE_LO, COS_TRANS_SERVICE_HI);
+    trans_ioctl_set_channel(fd_low, COS_TRANS_SERVICE_LO);
+    trans_ioctl_set_channel(fd_high, COS_TRANS_SERVICE_HI);
+    trans_ioctl_set_direction(fd_low, COS_TRANS_DIR_LTOC);
+    trans_ioctl_set_direction(fd_high, COS_TRANS_DIR_LTOC);
+    a = mmap(NULL, MAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd_low, 0);
+    b = mmap(NULL, MAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd_high, 0);
+    if (MAP_FAILED == a || MAP_FAILED == b) {
       perror("mmap");
       exit(-1);
     }
     cringbuf_init(&sharedbuf, a, MAP_SIZE);
+    cringbuf_init(&sharedbuf, b, MAP_SIZE);
 
     char portstr[7];
     int portnum;
     portstr[6] = '\0';
     printf("going to sleep for a few seconds; hurry and activate composite!\n");
     sleep(sleep_var); 
-         
+    int wl, wh; 
     do {
       int amread = 0;
     
@@ -160,16 +179,19 @@ recv_pkt(void *data)
 
       switch(portnum) { 
       case HIPRIOPORT:
-	write(fd, &c, 1);
+	wh = write(fd_high, &c, 1);
+	if(wh)
+	  printf("hi prior\n");
 	hi++;
 	break;
       case LOPRIOPORT:	
-	//if(ipis < MAXIPI) {
-	if(lo+hi < MAXIPI) {
-	  write(fd, &c, 1);
-	  lo++;
+	//	if(unlikely(lo < MAXIPI)) {
+	wl = write(fd_low, &c, 1);
+	if(wl)
+	  printf("lo prio\n");
+	//lo++;
 	  //ipis++;
-	}
+	//}
 	break;
       default:
 	break;
