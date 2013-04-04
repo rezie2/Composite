@@ -201,21 +201,32 @@ static int channel_init(int channel)
 
 	if (direction == COS_TRANS_DIR_LTOC)
 	  // call the bottom block in its own separate function
-	  channel_thd(channel)
+	  channel_thd(channel);
 	return 0;
 }
 
-static volatile int count; 
+//curr_thd can be set at some COS_TRANS_MIN to make this work with all channels
+//To have that work, make sure to add some min to cos_types.h
+static volatile int curr_thd = COS_TRANS_SERVICE_PRINT, first = 1; 
 
 int cos_init(void)
 {
-	int i;
-
-	lock_static_init(&l);
-	torlib_init();
-	for (i = 7 ; i < COS_TRANS_SERVICE_MAX ; i++) {
-		channel_init(i);
+	if(first) {
+	  int i = curr_thd;
+	  union sched_param sp;
+	
+	  first = 0;
+	  lock_static_init(&l);
+	  torlib_init();
+	  
+	  while(i < COS_TRANS_SERVICE_MAX) {
+	    sp.c.type = SCHEDP_PRIO;
+	    sp.c.value = i++;
+	    if(sched_create_thd(cos_spd_id(), sp.v, 0, 0) == 0) BUG();
+	  }
+	  return 0;
 	}
-
+	printc("CHANNEL WITH PRIO (%d) STARTED\n", curr_thd);
+	channel_init(curr_thd++);
 	return 0;
 }
