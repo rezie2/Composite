@@ -35,13 +35,14 @@ tsplit(spdid_t spdid, td_t td, char *param,
 	if (len > 1) ERR_THROW(-EINVAL, done);
 
 	channel = (int)(*param - '0');
+ 
 	if (channel > 9 || channel < 0) ERR_THROW(-EINVAL, done);
 	if (!channels[channel].exists)  ERR_THROW(-ENOENT, done);
 
 	nt = tor_alloc(&channels[channel], tflags);
 	if (!nt) ERR_THROW(-ENOMEM, done);
 	ret = nt->td;
-
+	
 	direction = channels[channel].direction;
 	if (direction == COS_TRANS_DIR_LTOC) {
 		if (tflags != TOR_READ)  ERR_THROW(-EINVAL, free);
@@ -154,6 +155,25 @@ done:
 	return ret;
 }
 
+void channel_thd(int channel) 
+{
+  unsigned short int bid; 
+  
+  bid = cos_brand_cntl(COS_BRAND_CREATE, 0, 0, cos_spd_id());
+  assert(bid > 0);
+  assert(!cos_trans_cntl(COS_TRANS_BRAND, channel, bid, 0));
+  if (sched_add_thd_to_brand(cos_spd_id(), bid, cos_get_thd_id())) BUG();
+  while (1) {
+    int ret;
+    //printc("IN TTRANS BEFORE IF\n");
+    if (-1 == (ret = cos_brand_wait(bid))) BUG();
+    //printc("IN TTRANS AFTER IF\n");
+    assert(channels[channel].t);
+    //printc("IN TTRANS. EVTID (%lu)\n", channels[channel].t->evtid);
+    evt_trigger(cos_spd_id(), channels[channel].t->evtid);
+  }
+}
+
 static int channel_init(int channel)
 {
 	char *addr, *start;
@@ -163,6 +183,7 @@ static int channel_init(int channel)
 
 	direction = cos_trans_cntl(COS_TRANS_DIRECTION, channel, 0, 0);
 	if (direction < 0) {
+	  printc("no torrent found: direction (%d)\n", direction);
 		channels[channel].exists = 0;
 		return 0;
 	}  
@@ -178,22 +199,13 @@ static int channel_init(int channel)
 	}
 	cringbuf_init(&channels[channel].rb, start, sz);
 
-	if (direction == COS_TRANS_DIR_LTOC) {
-		bid = cos_brand_cntl(COS_BRAND_CREATE, 0, 0, cos_spd_id());
-		assert(bid > 0);
-		assert(!cos_trans_cntl(COS_TRANS_BRAND, channel, bid, 0));
-		if (sched_add_thd_to_brand(cos_spd_id(), bid, cos_get_thd_id())) BUG();
-		while (1) {
-			int ret;
-			if (-1 == (ret = cos_brand_wait(bid))) BUG();
-			assert(channels[channel].t);
-			evt_trigger(cos_spd_id(), channels[channel].t->evtid);
-		}
-	}
-
-
+	if (direction == COS_TRANS_DIR_LTOC)
+	  // call the bottom block in its own separate function
+	  channel_thd(channel)
 	return 0;
 }
+
+static volatile int count; 
 
 int cos_init(void)
 {
@@ -201,7 +213,7 @@ int cos_init(void)
 
 	lock_static_init(&l);
 	torlib_init();
-	for (i = 0 ; i < COS_TRANS_SERVICE_MAX ; i++) {
+	for (i = 7 ; i < COS_TRANS_SERVICE_MAX ; i++) {
 		channel_init(i);
 	}
 
