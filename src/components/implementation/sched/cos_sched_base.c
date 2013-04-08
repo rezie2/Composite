@@ -350,6 +350,7 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 		TIMER_INIT(tfp, recs, TIMER_FPRR);
 
 		timer_start(&t);
+		//printc("    IN SCHED_SWITCH_THD. before first assert\n");
 		assert(cos_sched_lock_own());
 
 		/* 
@@ -370,11 +371,13 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 		 * scheduled.
 		 */
 		if (cos_sched_pending_event()) {
+		  //printc("    IN SCHED_SWITCH_THD. in first if block\n");
 			cos_sched_clear_events();
 			cos_sched_process_events(evt_callback, 0);
 		}
 
 		if (!target) {
+		  //printc("    IN SCHED_SWITCH_THD. in second if block\n");
 			/* 
 			 * If current is an upcall that wishes to terminate
 			 * its execution upon switching to the next thread,
@@ -385,6 +388,7 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 			 * current will terminate execution with the switch.
 			 */
 			if (flags & (COS_SCHED_BRAND_WAIT|COS_SCHED_TAILCALL)) {
+			  //printc("    IN SCHED_SWITCH_THD. in third if block\n");
 				/* we don't want next to be us! We are an
 				 * upcall completing execution */
 				timer_start(&tfp);
@@ -394,18 +398,26 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 				assert(next != current);
 				assert(!sched_thd_member(next));
 			} else {
+			  //printc("    IN SCHED_SWITCH_THD. in first else block\n");
 				timer_start(&tfp);
 				next = schedule(NULL);
 				timer_end(&tfp);
+				//printc("    IN SCHED_SWITCH_THD. before else's first assert\n");
 				assert(sched_is_root() || PERCPU_GET(sched_base_state)->timer != next);
+				//printc("    IN SCHED_SWITCH_THD. before else's second assert\n");
 				assert(!sched_thd_member(next));
 				/* if we are the next thread and no
 				 * dependencies have been introduced (i.e. we
 				 * are waiting on a component-lock for
 				 * another thread), then we're done */
-				if (next == current && !sched_thd_dependency(current)) goto done;
+				if (next == current && !sched_thd_dependency(current)) {
+				  printc("    IN SCHED_SWITCH_THD. before goto done\n");
+				  goto done;
+				}
 			}
+			//printc("    IN SCHED_SWITCH_THD. outside of first else block\n");
 		} else {
+		  //printc("    IN SCHED_SWITCH_THD. in second else block\n");
 			report_event(SCHED_TARGETTED_DEPENDENCY);
 			next = target;
 		}
@@ -416,6 +428,7 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 			 * have idle threads...instead they just use
 			 * the event/timer thread */
 			/* We are in the timer/child event thread! */
+		  printc("    IN SCHED_SWITCH_THD. in fifth if block\n");
 			if (current == PERCPU_GET(sched_base_state)->timer) goto done;
 			next = PERCPU_GET(sched_base_state)->timer;
 		}
@@ -440,7 +453,7 @@ static int sched_switch_thread_target(int flags, report_evt_t evt, struct sched_
 	return 0;
 done:
 	cos_sched_lock_release();
-
+	printc("    IN SCHED_SWITCH_THD. in done, before return\n");
 	return 0;
 }
 
@@ -938,13 +951,17 @@ int sched_block(spdid_t spdid, unsigned short int dependency_thd)
 		fp_block(thd, spdid);
 	}
 	assert(thd->wake_cnt < 2);
+	printc("    IN SCHED_BASE. before while loop\n");
 	while (0 == thd->wake_cnt) {
 		if (dependency_thd) {
+		        printc("    IN SCHED_BASE. in first if block\n");
 			assert(dep && dep == thd->dependency_thd);
 			sched_switch_thread_target(0, BLOCK_LOOP, dep);
 			cos_sched_lock_take();
 			report_event(BLOCKED_W_DEPENDENCY);
-			if (!first) { report_event(BLOCKED_DEP_RETRY); }
+			if (!first) { 
+			  printc("    IN SCHED_BASE. in second if block\n");
+			  report_event(BLOCKED_DEP_RETRY); }
 
 			/* 
 			 * Complicated case: We want to avoid the case
@@ -973,12 +990,19 @@ int sched_block(spdid_t spdid, unsigned short int dependency_thd)
 				goto unblock;
 			}
 		} else {
+		        printc("    IN SCHED_BASE. in first if block's else block\n");
 			sched_switch_thread(0, BLOCK_LOOP);
+			printc("    IN SCHED_BASE. after sched_switch_thread\n");
 			cos_sched_lock_take();
-			if (!first) { report_event(RETRY_BLOCK); }
+			printc("    IN SCHED_BASE. after cos_sched_lock_take\n");
+			if (!first) { 
+			  printc("    IN SCHED_BASE. in else's if's block\n");
+			  report_event(RETRY_BLOCK); 
+			}
 		}
 		first = 0;
 	}
+	printc("    IN SCHED_BASE. outside of while loop\n");
 	assert(thd->wake_cnt == 1);
 	/* The amount of time we've blocked */
 	ret = PERCPU_GET(sched_base_state)->ticks - thd->block_time - 1;
